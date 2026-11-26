@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Drone Fumaça — Observador</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#0f1419;--card:#18202a;--linha:#2a3644;--txt:#e6edf3;--mut:#8b9aab;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif;padding-bottom:env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--linha);position:sticky;top:0;background:var(--bg);z-index:5}
+header h1{font-size:16px;margin:0;flex:1}
+.badge{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:#2a3644}
+.ok{background:#12361d;color:var(--ok)}.warn{background:#3a2e0c;color:var(--warn)}.bad{background:#3d1614;color:var(--bad)}
+button{background:#223041;color:var(--txt);border:1px solid var(--linha);border-radius:8px;padding:8px 12px;font:inherit}
+#banner{display:none;background:var(--bad);color:#fff;padding:14px;font-weight:700;text-align:center;font-size:17px}
+main{display:flex;flex-direction:column;gap:12px;padding:12px;max-width:720px;margin:auto}
+.card{background:var(--card);border:1px solid var(--linha);border-radius:10px;padding:12px}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 8px}
+#thumb{width:100%;border-radius:8px;background:#111821;min-height:140px;display:block}
+.sub{color:var(--mut);font-size:13px;margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kv{background:#111821;border-radius:8px;padding:6px 8px}.kv span{display:block;font-size:11px;color:var(--mut)}.kv b{font-size:17px}
+#map{height:260px;border-radius:8px;background:#10161d}
+.al{display:flex;gap:10px;background:#2a1416;border:1px solid #5a2326;border-radius:8px;padding:8px;margin-bottom:8px}
+.al img{width:110px;height:82px;object-fit:cover;border-radius:6px}.al small{color:var(--mut);display:block}
+#login{max-width:360px;margin:60px auto;padding:0 16px}
+#login input{width:100%;margin:6px 0;padding:12px;border-radius:8px;border:1px solid var(--linha);background:#111821;color:var(--txt);font:inherit}
+#login button{width:100%;margin-top:8px;background:#1f6feb;border-color:#1f6feb}
+#err{color:var(--bad);min-height:20px;font-size:13px}
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<section id="login">
+  <h2>Drone Fumaça — Observador</h2>
+  <input id="email" type="email" placeholder="E-mail" autocomplete="username">
+  <input id="senha" type="password" placeholder="Senha" autocomplete="current-password">
+  <button id="entrar">Entrar</button>
+  <div id="err"></div>
+</section>
+<div id="app" hidden>
+<header>
+  <h1>Drone Fumaça</h1>
+  <span id="link" class="badge bad">sem dados</span>
+  <button id="som" title="Ativar som e notificações">🔔</button>
+  <button id="sair">Sair</button>
+</header>
+<main>
+  <section class="card"><h2>Última imagem</h2>
+    <img id="thumb" alt="Última miniatura recebida">
+    <div class="sub" id="thumbinfo">aguardando…</div></section>
+  <section class="card"><h2>Alertas de fumaça</h2><div id="alertas"><div class="sub">nenhum alerta ainda</div></div></section>
+  <section class="card"><h2>Voo</h2>
+    <div class="grid">
+      <div class="kv"><span>Modo</span><b id="modo">—</b></div>
+      <div class="kv"><span>Altura (m)</span><b id="alt">—</b></div>
+      <div class="kv"><span>Vel. solo (m/s)</span><b id="vel">—</b></div>
+      <div class="kv"><span>Bateria (V)</span><b id="bat">—</b></div>
+      <div class="kv"><span>Satélites</span><b id="sats">—</b></div>
+      <div class="kv"><span>Fila a bordo</span><b id="fila">—</b></div>
+    </div></section>
+  <section class="card"><h2>Posição</h2><div id="map"></div></section>
+</main>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, collection, query, orderBy, limit, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const cfg = { apiKey: "AIzaSyDrrOqGQsW6qksXSzSfr1kGNHf8MeqnSPI", authDomain: "drone-fumaca-tcc.firebaseapp.com",
+  projectId: "drone-fumaca-tcc", appId: "1:880905212661:web:f68f6ff1d1e988da716bbc" };
+const app = initializeApp(cfg), auth = getAuth(app), db = getFirestore(app);
+const $ = id => document.getElementById(id);
+let unsubs = [], map, marker, ultimoDado = 0, primeiraCarga = { alertas: true }, somOn = false, audio;
+
+function fmt(ts){ return new Date(ts*1000).toLocaleTimeString("pt-BR"); }
+function bip(){ try{ audio = audio || new (window.AudioContext||window.webkitAudioContext)();
+  const o = audio.createOscillator(), g = audio.createGain(); o.connect(g); g.connect(audio.destination);
+  o.frequency.value = 880; g.gain.value = .2; o.start(); o.stop(audio.currentTime+.6);}catch(e){} }
+
+$("entrar").onclick = async () => {
+  $("err").textContent = "";
+  try{ await setPersistence(auth, browserLocalPersistence);
+       await signInWithEmailAndPassword(auth, $("email").value.trim(), $("senha").value);
+  }catch(e){ $("err").textContent = "Não foi possível entrar (" + (e.code||e.message) + ")"; }
+};
+$("sair").onclick = () => signOut(auth);
+$("som").onclick = async () => { somOn = true; bip(); $("som").textContent = "🔔 ligado";
+  if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); };
+
+onAuthStateChanged(auth, user => {
+  unsubs.forEach(u => u()); unsubs = [];
+  $("login").hidden = !!user; $("app").hidden = !user;
+  if (!user) return;
+  if (!map){ map = L.map("map").setView([-26.72,-53.52], 13);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, attribution:"© OpenStreetMap"}).addTo(map); }
+  setTimeout(() => map.invalidateSize(), 300);
+  const erro = e => { $("link").className = "badge bad"; $("link").textContent = "sem permissão"; console.error(e); };
+
+  unsubs.push(onSnapshot(query(collection(db,"telemetria"), orderBy("ts","desc"), limit(1)), s => {
+    s.forEach(d => { const t = d.data(); ultimoDado = Math.max(ultimoDado, t.ts||0);
+      $("modo").textContent = t.modo ?? "—"; $("alt").textContent = t.rel_alt != null ? t.rel_alt.toFixed(0) : "—";
+      $("vel").textContent = t.vel_solo != null ? t.vel_solo.toFixed(1) : "—";
+      $("bat").textContent = t.bat_v != null ? t.bat_v.toFixed(1) : "—"; $("sats").textContent = t.sats ?? "—";
+      $("fila").textContent = t.fila_pend ?? "—";
+      if (t.lat != null && t.lon != null){ const p = [t.lat, t.lon];
+        if (!marker){ marker = L.circleMarker(p, {radius:8, color:"#58a6ff"}).addTo(map); map.setView(p, 15); }
+        else marker.setLatLng(p); } });
+  }, erro));
+
+  unsubs.push(onSnapshot(query(collection(db,"capturas"), orderBy("ts","desc"), limit(1)), s => {
+    s.forEach(d => { const c = d.data(); ultimoDado = Math.max(ultimoDado, c.ts||0);
+      $("thumb").src = "data:image/jpeg;base64," + c.imagem_b64;
+      $("thumbinfo").textContent = "Captura " + c.seq + " às " + fmt(c.ts) + (c.lat != null ? " · " + c.lat.toFixed(5) + ", " + c.lon.toFixed(5) : ""); });
+  }, erro));
+
+  unsubs.push(onSnapshot(query(collection(db,"alertas"), orderBy("ts","desc"), limit(20)), s => {
+    const el = $("alertas"); el.innerHTML = "";
+    if (s.empty) el.innerHTML = '<div class="sub">nenhum alerta ainda</div>';
+    s.forEach(d => { const a = d.data(); ultimoDado = Math.max(ultimoDado, a.ts||0);
+      const div = document.createElement("div"); div.className = "al";
+      div.innerHTML = '<img src="data:image/jpeg;base64,' + a.imagem_b64 + '"><div><b>Fumaça detectada</b> (' +
+        Math.round((a.prob||0)*100) + '%)<small>' + fmt(a.ts) + '</small><small>' +
+        (a.lat != null ? a.lat.toFixed(5) + ", " + a.lon.toFixed(5) : "sem posição") + '</small></div>';
+      el.appendChild(div);
+      if (a.lat != null && map) L.circleMarker([a.lat,a.lon], {radius:7, color:"#f85149", fillOpacity:.6}).addTo(map); });
+    if (!primeiraCarga.alertas) {
+      s.docChanges().forEach(ch => { if (ch.type === "added"){
+        const a = ch.doc.data(), b = $("banner");
+        b.style.display = "block"; b.textContent = "🔥 ALERTA DE FUMAÇA às " + fmt(a.ts) + " — toque para dispensar";
+        b.onclick = () => b.style.display = "none";
+        if (navigator.vibrate) navigator.vibrate([400,150,400]);
+        if (somOn) bip();
+        if ("Notification" in window && Notification.permission === "granted")
+          new Notification("Alerta de fumaça", { body: "Detectado às " + fmt(a.ts) }); } });
+    }
+    primeiraCarga.alertas = false;
+  }, erro));
+});
+
+setInterval(() => { const l = $("link"); if (!ultimoDado) return;
+  const idade = Date.now()/1000 - ultimoDado;
+  l.className = "badge " + (idade < 15 ? "ok" : idade < 90 ? "warn" : "bad");
+  l.textContent = idade < 15 ? "ao vivo" : "último dado há " + Math.round(idade) + " s"; }, 1000);
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
